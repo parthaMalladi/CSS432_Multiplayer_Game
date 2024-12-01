@@ -7,10 +7,20 @@
 #include <pthread.h>
 #include <cstring>
 #include <cstdlib>
+#include <vector>
+#include <mutex>
 
 using namespace std;
 
 const unsigned int bufSize = 1500; // Buffer size for incoming messages
+vector<pthread_t> threads;        // To track threads
+mutex threadMutex;                // Protects access to threads vector
+
+int randomNumber;                 // Random number for the game
+bool numberGenerated = false;     // Flag to ensure random number is generated once
+int readyClients = 0;             // Counter for ready clients
+bool gameStarted = false;         // Flag to prevent late joins
+mutex gameMutex;                  // Protects game state
 
 // Thread function to handle client requests
 void* thread_server(void* ptr) {
@@ -24,8 +34,30 @@ void* thread_server(void* ptr) {
             buf[bytesRead] = '\0'; // Null-terminate the string
             cout << "Received message from client: " << buf << endl;
 
-            // Send acknowledgment back to the client
-            write(*client, buf, bytesRead);
+            // Check for "ready" message
+            if (strcmp(buf, "ready") == 0) {
+                {
+                    lock_guard<mutex> lock(gameMutex);
+                    readyClients++;
+                    cout << "Client is ready. Total ready clients: " << readyClients << endl;
+
+                    // Start the game if all clients are ready
+                    if (!gameStarted && readyClients == threads.size()) {
+                        gameStarted = true;
+                        cout << "All clients are ready. Starting the game!" << endl;
+                    }
+                }
+
+                // Acknowledge "ready" message
+                write(*client, buf, bytesRead);
+            } else if (gameStarted) {
+                // If the game has started, echo messages
+                write(*client, buf, bytesRead);
+            } else {
+                // Game not started; notify the client
+                const char* msg = "Game has not started yet. Please send 'ready'.";
+                write(*client, msg, strlen(msg));
+            }
         } else {
             cerr << "Failed to read from client or client disconnected." << endl;
             break; // Exit loop if client disconnects
@@ -82,6 +114,25 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        {
+            lock_guard<mutex> lock(gameMutex);
+            if (gameStarted) {
+                // Reject new clients if the game has started
+                const char* msg = "Game has already started. Cannot join.";
+                write(clientSd, msg, strlen(msg));
+                close(clientSd);
+                continue;
+            }
+
+            // Generate random number if first client
+            if (!numberGenerated) {
+                srand(time(nullptr));
+                randomNumber = rand() % 100 + 1; // Random number between 1 and 100
+                numberGenerated = true;
+                cout << "Random number generated: " << randomNumber << endl;
+            }
+        }
+
         // Display client information
         cout << "Connection established with client: " << inet_ntoa(clientAddr.sin_addr) << endl;
 
@@ -95,6 +146,10 @@ int main(int argc, char* argv[]) {
             delete clientPtr;
         } else {
             pthread_detach(threadId); // Detach thread to free resources automatically
+            {
+                lock_guard<mutex> lock(threadMutex);
+                threads.push_back(threadId);
+            }
         }
     }
 
