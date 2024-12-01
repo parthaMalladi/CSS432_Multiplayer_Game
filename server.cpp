@@ -9,22 +9,24 @@
 #include <cstdlib>
 #include <vector>
 #include <mutex>
+#include <map>
 
 using namespace std;
 
-const unsigned int bufSize = 1500; // Buffer size for incoming messages
-vector<pthread_t> threads;        // To track threads
-mutex threadMutex;                // Protects access to threads vector
+const unsigned int bufSize = 1500;  // Buffer size for incoming messages
+vector<pthread_t> threads;          // To track threads
+mutex threadMutex;                  // Protects access to threads vector
+map<int, bool> clientReady;         // Map to track client readiness
 
-int randomNumber;                 // Random number for the game
-bool numberGenerated = false;     // Flag to ensure random number is generated once
-int readyClients = 0;             // Counter for ready clients
-bool gameStarted = false;         // Flag to prevent late joins
-mutex gameMutex;                  // Protects game state
+int randomNumber;                   // Random number for the game
+bool numberGenerated = false;       // Flag to ensure random number is generated once
+int readyClients = 0;               // Counter for ready clients
+bool gameStarted = false;           // Flag to prevent late joins
+mutex gameMutex;                    // Protects game state
 
-// Thread function to handle client requests
 void* thread_server(void* ptr) {
     int* client = (int*)ptr;
+    pthread_t thisThread = pthread_self(); // Get current thread ID
     char buf[bufSize];
 
     while (true) {
@@ -34,37 +36,48 @@ void* thread_server(void* ptr) {
             buf[bytesRead] = '\0'; // Null-terminate the string
             cout << "Received message from client: " << buf << endl;
 
-            // Check for "ready" message
             if (strcmp(buf, "ready") == 0) {
-                {
-                    lock_guard<mutex> lock(gameMutex);
-                    readyClients++;
-                    cout << "Client is ready. Total ready clients: " << readyClients << endl;
+                lock_guard<mutex> lock(gameMutex);
+                if (gameStarted) {
+                    const char* msg = "Game has already started. Cannot ready up.";
+                    write(*client, msg, strlen(msg));
+                } else {
+                    if (clientReady[*client]) {
+                        const char* msg = "You are already ready.";
+                        write(*client, msg, strlen(msg));
+                    } else {
+                        clientReady[*client] = true;
+                        readyClients++;
+                        cout << "Client is ready. Total ready clients: " << readyClients << endl;
 
-                    // Start the game if all clients are ready
-                    if (!gameStarted && readyClients == threads.size()) {
-                        gameStarted = true;
-                        cout << "All clients are ready. Starting the game!" << endl;
+                        if (!gameStarted && readyClients == threads.size()) {
+                            gameStarted = true;
+                            cout << "All clients are ready. Starting the game!" << endl;
+                        }
+                        write(*client, buf, bytesRead); // Acknowledge ready
                     }
                 }
-
-                // Acknowledge "ready" message
-                write(*client, buf, bytesRead);
             } else if (gameStarted) {
-                // If the game has started, echo messages
-                write(*client, buf, bytesRead);
+                write(*client, buf, bytesRead); // Echo messages after the game starts
             } else {
-                // Game not started; notify the client
                 const char* msg = "Game has not started yet. Please send 'ready'.";
                 write(*client, msg, strlen(msg));
             }
         } else {
-            cerr << "Failed to read from client or client disconnected." << endl;
-            break; // Exit loop if client disconnects
+            cerr << "Client disconnected or failed to read." << endl;
+            break;
         }
     }
 
-    // Clean up
+    // Clean up on disconnect
+    {
+        lock_guard<mutex> lock(gameMutex);
+        if (clientReady[*client]) {
+            readyClients--;
+        }
+        clientReady.erase(*client);
+    }
+
     close(*client);
     delete client;
     return nullptr;
