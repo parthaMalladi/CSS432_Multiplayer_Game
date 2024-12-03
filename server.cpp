@@ -24,6 +24,25 @@ int readyClients = 0;               // Counter for ready clients
 bool gameStarted = false;           // Flag to prevent late joins
 mutex gameMutex;                    // Protects game state
 
+string gameLogic(char* c) {
+    int guessedNumber = atoi(c);
+    int difference = abs(guessedNumber - randomNumber);
+
+    if (difference > 500) {
+        return "cold";
+    } else if (difference > 100) {
+        return "warm";
+    } else if (difference > 50) {
+        return "hot";
+    } else if (difference > 15) {
+        return "very hot";
+    } else if (difference >= 1) {
+        return "boiling";
+    } else {
+        return "correct";
+    }
+}
+
 void* thread_server(void* ptr) {
     int* client = (int*)ptr;
     pthread_t thisThread = pthread_self(); // Get current thread ID
@@ -54,11 +73,14 @@ void* thread_server(void* ptr) {
                             gameStarted = true;
                             cout << "All clients are ready. Starting the game!" << endl;
                         }
-                        write(*client, buf, bytesRead); // Acknowledge ready
+
+                        const char* msg = "Ready Acknowledged.";
+                        write(*client, msg, strlen(msg));
                     }
                 }
             } else if (gameStarted) {
-                write(*client, buf, bytesRead); // Echo messages after the game starts
+                string res = gameLogic(buf);
+                write(*client, res.c_str(), res.length());
             } else {
                 const char* msg = "Game has not started yet. Please send 'ready'.";
                 write(*client, msg, strlen(msg));
@@ -140,7 +162,7 @@ int main(int argc, char* argv[]) {
             // Generate random number if first client
             if (!numberGenerated) {
                 srand(time(nullptr));
-                randomNumber = rand() % 100 + 1; // Random number between 1 and 100
+                randomNumber = rand() % 1000 + 1; // Random number between 1 and 100
                 numberGenerated = true;
                 cout << "Random number generated: " << randomNumber << endl;
             }
